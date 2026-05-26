@@ -12,6 +12,23 @@ from isaaclab.managers.manager_base import ManagerTermBase
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
+# 作用：读取每 env 的 cuboid y 轴宽度（标称尺寸 × 随机化 y_scale）。供 stage1 encoder/critic 区分不同宽度的托盘。
+def cuboid_width_y(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("tray"),
+    nominal_size_y: float = 0.416,
+) -> torch.Tensor:
+    """读取每 env 的 cuboid y 轴宽度。训练时从 events._all_cuboid_scales 取，未随机化时回退到 nominal_size_y。"""
+    from steadytray.tasks.mdp import events as _events
+    scales = _events._all_cuboid_scales
+    if scales.numel() == 0 or scales.shape[0] < env.num_envs:
+        # 未做随机化时全部回退到标称值
+        return torch.full((env.num_envs, 1), nominal_size_y, device=env.device)
+    if scales.device != env.device:
+        scales = scales.to(env.device)
+    width = (scales[: env.num_envs, 1] * nominal_size_y).unsqueeze(-1)
+    return width
+
 # 作用：读取指定刚体在本体系下的投影重力。
 def rigid_body_projected_gravity(
     env: ManagerBasedRLEnv,
@@ -303,30 +320,17 @@ class CombinedObjectObservationsDict(ManagerTermBase):
     # 作用：初始化字典观测组合器。
     def __init__(
         self,
-        cfg: SceneEntityCfg,
+        cfg,
         env: ManagerBasedRLEnv,
-        object_sensor_cfg: SceneEntityCfg = SceneEntityCfg("object_tray_transform"),
-        object_asset_cfg: SceneEntityCfg = SceneEntityCfg("object"),
-        robot_torso_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="torso_link"),
-        target_frame_name: str = "object",
-        include_pos: bool = True,
-        include_ang_vel: bool = True,
-        include_lin_vel: bool = True,
-        include_gravity: bool = True,
-        pos_scale: float = 1.0,
-        ang_vel_scale: float = 1.0,
-        lin_vel_scale: float = 1.0,
-        gravity_scale: float = 1.0,
-        pos_clip: tuple[float, float] | None = None,
-        ang_vel_clip: tuple[float, float] | None = None,
-        lin_vel_clip: tuple[float, float] | None = None,
-        gravity_clip: tuple[float, float] | None = None,
-        pos_noise: NoiseCfg | None = None,
-        ang_vel_noise: NoiseCfg | None = None,
-        lin_vel_noise: NoiseCfg | None = None,
-        gravity_noise: NoiseCfg | None = None,
     ):
         super().__init__(cfg, env)
+
+        # IsaacLab 实例化 class 型 ObsTerm 时只传 cfg/env，参数从 cfg.params 取（用默认值兜底）
+        p = dict(cfg.params)
+
+        object_sensor_cfg: SceneEntityCfg = p.get("object_sensor_cfg", SceneEntityCfg("object_tray_transform"))
+        object_asset_cfg: SceneEntityCfg = p.get("object_asset_cfg", SceneEntityCfg("object"))
+        robot_torso_cfg: SceneEntityCfg = p.get("robot_torso_cfg", SceneEntityCfg("robot", body_names="torso_link"))
 
         object_sensor_cfg.resolve(env.scene)
         object_asset_cfg.resolve(env.scene)
@@ -335,27 +339,27 @@ class CombinedObjectObservationsDict(ManagerTermBase):
         self.object_sensor_cfg = object_sensor_cfg
         self.object_asset_cfg = object_asset_cfg
         self.robot_torso_cfg = robot_torso_cfg
-        self.target_frame_name = target_frame_name
+        self.target_frame_name = p.get("target_frame_name", "object")
 
-        self.include_pos = include_pos
-        self.include_ang_vel = include_ang_vel
-        self.include_lin_vel = include_lin_vel
-        self.include_gravity = include_gravity
+        self.include_pos = p.get("include_pos", True)
+        self.include_ang_vel = p.get("include_ang_vel", True)
+        self.include_lin_vel = p.get("include_lin_vel", True)
+        self.include_gravity = p.get("include_gravity", True)
 
-        self.pos_scale = pos_scale
-        self.ang_vel_scale = ang_vel_scale
-        self.lin_vel_scale = lin_vel_scale
-        self.gravity_scale = gravity_scale
+        self.pos_scale = p.get("pos_scale", 1.0)
+        self.ang_vel_scale = p.get("ang_vel_scale", 1.0)
+        self.lin_vel_scale = p.get("lin_vel_scale", 1.0)
+        self.gravity_scale = p.get("gravity_scale", 1.0)
 
-        self.pos_clip = pos_clip
-        self.ang_vel_clip = ang_vel_clip
-        self.lin_vel_clip = lin_vel_clip
-        self.gravity_clip = gravity_clip
+        self.pos_clip = p.get("pos_clip", None)
+        self.ang_vel_clip = p.get("ang_vel_clip", None)
+        self.lin_vel_clip = p.get("lin_vel_clip", None)
+        self.gravity_clip = p.get("gravity_clip", None)
 
-        self.pos_noise = pos_noise
-        self.ang_vel_noise = ang_vel_noise
-        self.lin_vel_noise = lin_vel_noise
-        self.gravity_noise = gravity_noise
+        self.pos_noise = p.get("pos_noise", None)
+        self.ang_vel_noise = p.get("ang_vel_noise", None)
+        self.lin_vel_noise = p.get("lin_vel_noise", None)
+        self.gravity_noise = p.get("gravity_noise", None)
 
     # 作用：计算并返回字典形式的组合观测。
     def __call__(

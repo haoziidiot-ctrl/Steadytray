@@ -20,41 +20,65 @@
 ### 1. 克隆仓库
 
 ```bash
-
 # Clone SteadyTray
 git clone https://github.com/haoziidiot-ctrl/Steadytray.git
 
+# 安装 git-lfs 和 tmux
+apt-get update && apt-get install -y git-lfs tmux
+git lfs install
 ```
 
-### 2. 创建conda环境
-
+### 2. 创建 conda 环境并安装 IsaacSim / PyTorch
 
 ```bash
-  conda create -n isaaclab python=3.10 -y
-  conda activate isaaclab
+conda create -n isaaclab python=3.10 -y
+conda activate isaaclab
 
-  python -m pip install --upgrade pip
-  python -m pip install torch==2.7.0 torchvision==0.22.0 \
+python -m pip install --upgrade pip
+
+# PyTorch 2.7 + CUDA 12.8
+python -m pip install torch==2.7.0 torchvision==0.22.0 \
     --index-url https://download.pytorch.org/whl/cu128
-  python -m pip install "isaacsim[all,extscache]==4.5.0" \
+
+# Isaac Sim 4.5（一次性拉全套子包）
+python -m pip install "isaacsim[all,extscache]==4.5.0" \
     --extra-index-url https://pypi.nvidia.com
-  cd /root/autodl-tmp/IsaacLab
-  ./isaaclab.sh --install all
-  cd /root/autodl-tmp/steadytray
-  python -m pip install -e source/steadytray
 ```
 
-
-### 3. 安装 SteadyTray
-
+### 3. 安装 IsaacLab（项目用的是自定义分支）
 
 ```bash
-cd /workspace/steadytray
-python -m pip install -e source/steadytray
+cd /root/autodl-tmp/IsaacLab
+./isaaclab.sh --install all
+```
 
-# Install git-lfs and tmux
-apt-get update && apt-get install -y git-lfs
-apt update && apt install -y tmux
+### 4. 安装训练依赖（RSL-RL + wandb）
+
+```bash
+python -m pip install rsl-rl-lib==2.3.3 wandb
+```
+
+### 5. 安装 SteadyTray
+
+```bash
+cd /root/autodl-tmp/steadytray
+python -m pip install -e source/steadytray
+```
+
+### 6. 生成 X2 USD（X2 任务首次必跑；G1 任务可跳过）
+
+```bash
+cd /root/autodl-tmp/steadytray
+python scripts/asset_tools/convert_x2_urdf.py \
+    deploy/deploy_mujoco/x2t2d5_description_0525/x2_29dof_hand_simple_collision.urdf \
+    source/steadytray/steadytray/assets/usds/x2_29dof_hand.usd \
+    --headless
+```
+
+### 7. wandb 登录
+
+```bash
+wandb login   # 粘 API key；或 export WANDB_API_KEY=xxx
 ```
 
 ## 训练

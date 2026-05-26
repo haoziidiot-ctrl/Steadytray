@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 
 _all_rel_pos = torch.tensor([])  # 跨回合缓存物体相对位置
 _all_scales = torch.tensor([])  # 跨回合缓存物体缩放参数（半径与高度）
+_all_cuboid_scales = torch.tensor([])  # 跨回合缓存 cuboid 缩放参数 (sx, sy, sz)，prestartup 一次写入后保持不变
 
 # 作用：计算并设置物体相对机器人的位置与姿态。
 def _compute_and_set_object_state(
@@ -258,6 +259,82 @@ def randomize_cylinder_scale(
                 op_order_spec.default = Vt.TokenArray(["xformOp:translate", "xformOp:orient", "xformOp:scale"])
     
     return _all_scales
+
+# 作用：随机缩放刚体长方体并写入 USD scale，prestartup 阶段每 env 一次性写入。
+def randomize_cuboid_scale(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor | None,
+    x_scale_range: tuple[float, float],
+    y_scale_range: tuple[float, float],
+    z_scale_range: tuple[float, float],
+    asset_cfg: SceneEntityCfg,
+    relative_child_path: str | None = None,
+) -> torch.Tensor:
+    """随机缩放 cuboid 物体的三轴尺寸。"""
+    global _all_cuboid_scales
+
+    if env.sim.is_playing():
+        raise RuntimeError(
+            "Randomizing scale while simulation is running leads to unpredictable behaviors."
+            " Please ensure that the event term is called before the simulation starts by using the 'usd' mode."
+        )
+
+    asset: RigidObject = env.scene[asset_cfg.name]
+
+    if isinstance(asset, Articulation):
+        raise ValueError(
+            "Scaling an articulation randomly is not supported."
+        )
+
+    if _all_cuboid_scales.numel() == 0 or _all_cuboid_scales.shape[0] < env.num_envs:
+        _all_cuboid_scales = torch.ones((env.num_envs, 3), device=env.device)
+
+    if _all_cuboid_scales.device != env.device:
+        _all_cuboid_scales = _all_cuboid_scales.to(env.device)
+
+    if env_ids is None:
+        env_ids = torch.arange(env.scene.num_envs, device="cpu")
+    else:
+        env_ids = env_ids.cpu()
+
+    stage = omni.usd.get_context().get_stage()
+    prim_paths = sim_utils.find_matching_prim_paths(asset.cfg.prim_path)
+
+    x_samples = math_utils.sample_uniform(x_scale_range[0], x_scale_range[1], (len(env_ids),), device="cpu")
+    y_samples = math_utils.sample_uniform(y_scale_range[0], y_scale_range[1], (len(env_ids),), device="cpu")
+    z_samples = math_utils.sample_uniform(z_scale_range[0], z_scale_range[1], (len(env_ids),), device="cpu")
+
+    sampled_scales = torch.stack([x_samples, y_samples, z_samples], dim=1).to(env.device)
+    _all_cuboid_scales[env_ids] = sampled_scales
+
+    rand_samples = torch.stack([x_samples, y_samples, z_samples], dim=1).tolist()
+
+    if relative_child_path is None:
+        relative_child_path = ""
+    elif not relative_child_path.startswith("/"):
+        relative_child_path = "/" + relative_child_path
+
+    with Sdf.ChangeBlock():
+        for i, env_id in enumerate(env_ids):
+            prim_path = prim_paths[env_id] + relative_child_path
+            prim_spec = Sdf.CreatePrimInLayer(stage.GetRootLayer(), prim_path)
+
+            scale_spec = prim_spec.GetAttributeAtPath(prim_path + ".xformOp:scale")
+            has_scale_attr = scale_spec is not None
+            if not has_scale_attr:
+                scale_spec = Sdf.AttributeSpec(prim_spec, prim_path + ".xformOp:scale", Sdf.ValueTypeNames.Double3)
+
+            scale_spec.default = Gf.Vec3f(*rand_samples[i])
+
+            if not has_scale_attr:
+                op_order_spec = prim_spec.GetAttributeAtPath(prim_path + ".xformOpOrder")
+                if op_order_spec is None:
+                    op_order_spec = Sdf.AttributeSpec(
+                        prim_spec, UsdGeom.Tokens.xformOpOrder, Sdf.ValueTypeNames.TokenArray
+                    )
+                op_order_spec.default = Vt.TokenArray(["xformOp:translate", "xformOp:orient", "xformOp:scale"])
+
+    return _all_cuboid_scales
 
 # 作用：随机扰动刚体质心位置。
 def randomize_rigid_body_com_fixed(

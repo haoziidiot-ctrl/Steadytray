@@ -191,6 +191,58 @@ class G1AdapterSteadyTrayRunnerCfg(RslRlOnPolicyRunnerCfg):
     clip_actions = 100.0
 
 @configclass
+# 作用：定义 X2 stage1（站立托盘）训练 runner 配置。无 base actor 加载，从零训练 actor + Transformer encoder + critic。
+class X2TrayStage1RunnerCfg(RslRlOnPolicyRunnerCfg):
+    """X2 stage1 训练 runner：从零训练 actor，encoder 处理 proprio + 托盘观测时序。"""
+
+    num_steps_per_env = 24
+    max_iterations = 50000
+    save_interval = 100
+    experiment_name = "x2_steady_tray_stage1"
+    empirical_normalization = False
+    logger = "wandb"
+    wandb_project = "steadytray_x2_stage1"
+
+    policy = RslRlAdaptedActorCriticCfg(
+        class_name="AdaptedActorCritic",
+        adapter_type="film",  # 无 base policy 加载时 FiLM α 从 0 起步，不影响 actor 主干
+        init_noise_std=1.0,
+
+        actor_hidden_dims=[512, 256, 128],
+        critic_hidden_dims=[512, 256, 128],
+        activation="elu",
+
+        encoder_type="transformer",
+        ctx_dim=64,
+        encoder_layers=2,
+        num_heads=4,
+        encoder_dropout=0.0,
+
+        use_gate=False,
+        residual_hidden_dims=[512, 256, 128],
+        clamp_residual=None,
+        clamp_gamma=3.0,
+        adapter_hidden=128,
+    )
+
+    algorithm = RslRlPpoAlgorithmCfg(
+        value_loss_coef=1.0,
+        use_clipped_value_loss=True,
+        clip_param=0.2,
+        entropy_coef=0.01,
+        num_learning_epochs=5,
+        num_mini_batches=4,
+        learning_rate=1.0e-4,
+        schedule="adaptive",
+        gamma=0.99,
+        lam=0.95,
+        desired_kl=0.01,
+        max_grad_norm=1.0,
+    )
+
+    clip_actions = 100.0
+
+@configclass
 # 作用：定义 Stage 4 student-teacher 蒸馏训练配置。
 class G1AdapterDistillationRunnerCfg(RslRlOnPolicyRunnerCfg):
     """定义 Stage 4 student-teacher 蒸馏训练配置。"""
